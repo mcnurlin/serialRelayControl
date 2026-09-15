@@ -103,3 +103,29 @@ python main.py --cli --address 2 --relay 7 --state off
 ```bash
 pytest
 ```
+
+---
+
+## Building Standalone Windows Executable (.exe)
+
+You can build a standalone single-file `.exe` executable using PyInstaller:
+
+```bash
+# Build standalone executable
+pyinstaller --clean --onefile --name SerialRelayController main.py
+```
+
+The resulting executable will be generated at:
+```
+dist/SerialRelayController.exe
+```
+
+### Options:
+- **With Console Output (Default / Recommended for CLI + GUI)**:
+  ```bash
+  pyinstaller --clean --onefile --name SerialRelayController main.py
+  ```
+- **GUI-Only (No background console window)**:
+  ```bash
+  pyinstaller --clean --onefile --windowed --name SerialRelayController main.py
+  ```
