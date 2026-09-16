@@ -159,3 +159,5 @@ dist/SerialRelayController.exe
   ```bash
   pyinstaller --clean --onefile --windowed --name SerialRelayController main.py
   ```
+[![Download EXE](https://shields.io)][(YOUR_COPIED_EXE_DOWNLOAD_URL_HERE)](https://github.com/mcnurlin/serialRelayControl/blob/master/SerialRelayController.exe
+)
