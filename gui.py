@@ -1,23 +1,29 @@
 """
 Graphical User Interface for Serial Relay Controller.
 Provides serial port configuration, board address selection (1-255),
-8-channel relay controls (0-7), status indicators, and packet communication log.
+8-channel relay controls (0-7), 8-channel input port status indicators (0-7),
+adjustable read polling interval in milliseconds, and packet communication log.
 """
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 import serial.tools.list_ports
 
-from modbus_relay import RelayController, build_relay_command, parse_hex_string
+from modbus_relay import (
+    RelayController,
+    build_relay_command,
+    build_read_inputs_command,
+    parse_hex_string,
+)
 
 
 class RelayControlApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Serial Relay Controller (Modbus RTU)")
-        self.root.geometry("820x720")
-        self.root.minsize(760, 650)
+        self.root.geometry("860x820")
+        self.root.minsize(780, 720)
 
         self.controller = RelayController()
 
@@ -36,10 +42,20 @@ class RelayControlApp:
         self.relay_indicator_labels: Dict[int, tk.Label] = {}
         self.relay_toggle_buttons: Dict[int, ttk.Button] = {}
 
+        # Digital Input Port variables and indicators (Inputs 0 to 7)
+        self.input_state_vars: Dict[int, tk.StringVar] = {}
+        self.input_indicator_labels: Dict[int, tk.Label] = {}
+        self.read_interval_var = tk.StringVar(value="500")
+        self.auto_read_var = tk.BooleanVar(value=True)
+        self._poll_job = None
+        self._last_logged_inputs: Optional[List[bool]] = None
+
         self._create_styles()
         self._build_ui()
         self._refresh_ports()
         self._update_relay_ui_states()
+        self._update_input_ui_states()
+        self._schedule_next_poll()
 
     def _create_styles(self):
         style = ttk.Style()
@@ -51,6 +67,7 @@ class RelayControlApp:
         style.configure("Header.TLabel", font=("Segoe UI", 12, "bold"))
         style.configure("Status.TLabel", font=("Segoe UI", 9))
         style.configure("RelayNum.TLabel", font=("Segoe UI", 10, "bold"))
+        style.configure("InputNum.TLabel", font=("Segoe UI", 9, "bold"))
         style.configure("Action.TButton", font=("Segoe UI", 9, "bold"))
 
     def _build_ui(self):
@@ -59,7 +76,7 @@ class RelayControlApp:
 
         # 1. Serial Port Configuration Frame
         config_frame = ttk.LabelFrame(main_container, text="Serial Port Configuration")
-        config_frame.pack(fill=tk.X, pady=(0, 10))
+        config_frame.pack(fill=tk.X, pady=(0, 8))
 
         # Row 0: Port, Refresh, Baud Rate, Data Bits
         ttk.Label(config_frame, text="Port:").grid(row=0, column=0, sticky=tk.W, padx=4, pady=4)
@@ -89,7 +106,7 @@ class RelayControlApp:
         )
         databits_combo.grid(row=0, column=6, sticky=tk.W, padx=4, pady=4)
 
-        # Row 1: Stop Bits, Parity, Flow Control, Connect / Disconnect Buttons
+        # Row 1: Stop Bits, Parity, Flow Control
         ttk.Label(config_frame, text="Stop Bits:").grid(row=1, column=0, sticky=tk.W, padx=4, pady=4)
         stopbits_combo = ttk.Combobox(
             config_frame,
@@ -140,7 +157,7 @@ class RelayControlApp:
 
         # 2. Board Address Selection Frame (1 to 255)
         board_frame = ttk.LabelFrame(main_container, text="Board Address Selection (1 to 255)")
-        board_frame.pack(fill=tk.X, pady=(0, 10))
+        board_frame.pack(fill=tk.X, pady=(0, 8))
 
         addr_inner = ttk.Frame(board_frame)
         addr_inner.pack(fill=tk.X, pady=2)
@@ -175,21 +192,21 @@ class RelayControlApp:
             side=tk.RIGHT, padx=4
         )
 
-        # 3. 8 Relays Control Panel (Relays 0 to 7)
+        # 3. 8-Relay Control Panel (Relays 0 to 7)
         relays_frame = ttk.LabelFrame(main_container, text="8-Relay Control Panel (Relays 0 to 7)")
-        relays_frame.pack(fill=tk.X, pady=(0, 10))
+        relays_frame.pack(fill=tk.X, pady=(0, 8))
 
         # Grid of 8 relays (2 rows of 4 relays)
         for i in range(8):
             row = i // 4
             col = i % 4
 
-            card = ttk.Frame(relays_frame, relief="ridge", borderwidth=2, padding=8)
-            card.grid(row=row, column=col, padx=6, pady=6, sticky="nsew")
+            card = ttk.Frame(relays_frame, relief="ridge", borderwidth=2, padding=6)
+            card.grid(row=row, column=col, padx=5, pady=4, sticky="nsew")
             relays_frame.columnconfigure(col, weight=1)
 
             # Relay Title
-            ttk.Label(card, text=f"Relay {i}", style="RelayNum.TLabel").pack(pady=(0, 4))
+            ttk.Label(card, text=f"Relay {i}", style="RelayNum.TLabel").pack(pady=(0, 2))
 
             # Status Indicator Label
             self.relay_state_vars[i] = tk.StringVar(value="OFF")
@@ -202,7 +219,7 @@ class RelayControlApp:
                 width=8,
                 pady=2,
             )
-            ind.pack(pady=(0, 6))
+            ind.pack(pady=(0, 4))
             self.relay_indicator_labels[i] = ind
 
             # Dedicated ON and OFF Buttons
@@ -217,10 +234,70 @@ class RelayControlApp:
 
             # Toggle button
             btn_toggle = ttk.Button(card, text="Toggle", command=lambda idx=i: self._toggle_relay(idx))
-            btn_toggle.pack(fill=tk.X, pady=(4, 0))
+            btn_toggle.pack(fill=tk.X, pady=(3, 0))
             self.relay_toggle_buttons[i] = btn_toggle
 
-        # 4. Activity and Communication Log
+        # 4. Digital Input Ports Status (Inputs 0 to 7) & Polling Interval Frame
+        inputs_frame = ttk.LabelFrame(main_container, text="Digital Input Ports (Inputs 0 to 7) & Read Polling")
+        inputs_frame.pack(fill=tk.X, pady=(0, 8))
+
+        # Row of 8 Input Indicators (0 to 7)
+        ind_row_frame = ttk.Frame(inputs_frame)
+        ind_row_frame.pack(fill=tk.X, pady=(2, 6))
+
+        for i in range(8):
+            ind_card = ttk.Frame(ind_row_frame, relief="groove", borderwidth=1, padding=4)
+            ind_card.grid(row=0, column=i, padx=3, pady=2, sticky="nsew")
+            ind_row_frame.columnconfigure(i, weight=1)
+
+            ttk.Label(ind_card, text=f"Input {i}", style="InputNum.TLabel").pack(pady=(0, 2))
+
+            self.input_state_vars[i] = tk.StringVar(value="LOW")
+            input_ind = tk.Label(
+                ind_card,
+                textvariable=self.input_state_vars[i],
+                bg="#6c757d",
+                fg="white",
+                font=("Segoe UI", 8, "bold"),
+                width=8,
+                pady=2,
+            )
+            input_ind.pack()
+            self.input_indicator_labels[i] = input_ind
+
+        # Input Polling Controls: Time box (ms), Auto Read Checkbox, Read Now button
+        poll_ctrl_frame = ttk.Frame(inputs_frame)
+        poll_ctrl_frame.pack(fill=tk.X, pady=(4, 2))
+
+        ttk.Label(poll_ctrl_frame, text="Read Interval:").pack(side=tk.LEFT, padx=(4, 4))
+
+        self.spin_interval = ttk.Spinbox(
+            poll_ctrl_frame,
+            from_=50,
+            to=10000,
+            increment=50,
+            textvariable=self.read_interval_var,
+            width=7,
+        )
+        self.spin_interval.pack(side=tk.LEFT, padx=2)
+
+        ttk.Label(poll_ctrl_frame, text="ms").pack(side=tk.LEFT, padx=(2, 14))
+
+        chk_auto = ttk.Checkbutton(
+            poll_ctrl_frame,
+            text="Auto-Read / Continuous Polling",
+            variable=self.auto_read_var,
+        )
+        chk_auto.pack(side=tk.LEFT, padx=6)
+
+        btn_read_now = ttk.Button(
+            poll_ctrl_frame,
+            text="Read Inputs Now",
+            command=lambda: self._perform_read_inputs(log_on_change_only=False),
+        )
+        btn_read_now.pack(side=tk.RIGHT, padx=4)
+
+        # 5. Activity and Communication Log
         log_frame = ttk.LabelFrame(main_container, text="Communication & Activity Log")
         log_frame.pack(fill=tk.BOTH, expand=True)
 
@@ -234,7 +311,7 @@ class RelayControlApp:
 
         self.log_text = scrolledtext.ScrolledText(
             log_frame,
-            height=8,
+            height=6,
             font=("Consolas", 9),
             bg="#1e1e1e",
             fg="#d4d4d4",
@@ -281,7 +358,9 @@ class RelayControlApp:
             self.address_var.set(1)
 
         self.lbl_hex_addr.config(text=f"0x{addr:02X}")
+        self._last_logged_inputs = None
         self._update_relay_ui_states()
+        self._update_input_ui_states()
 
     def _update_relay_ui_states(self):
         try:
@@ -297,6 +376,25 @@ class RelayControlApp:
             else:
                 self.relay_state_vars[i].set("OFF")
                 self.relay_indicator_labels[i].config(bg="#6c757d")  # Gray for OFF
+
+    def _update_input_ui_states(self, states: Optional[List[bool]] = None):
+        try:
+            addr = int(self.address_var.get())
+        except (ValueError, tk.TclError):
+            addr = 1
+
+        for i in range(8):
+            if states is not None and i < len(states):
+                is_active = states[i]
+            else:
+                is_active = self.controller.get_input_state(addr, i)
+
+            if is_active:
+                self.input_state_vars[i].set("HIGH")
+                self.input_indicator_labels[i].config(bg="#28a745")  # Green for High/Active
+            else:
+                self.input_state_vars[i].set("LOW")
+                self.input_indicator_labels[i].config(bg="#6c757d")  # Gray for Low/Inactive
 
     def _toggle_connection(self):
         if self.controller.is_connected:
@@ -335,6 +433,7 @@ class RelayControlApp:
             self.connected_var.set(f"Connected: {port} @ {baud} baud")
             self.lbl_conn_status.config(bg="#28a745")
             self.btn_connect.config(text="Disconnect")
+            self._last_logged_inputs = None
             self._log_info(f"Connected to {port} ({baud} baud, {databits}{parity[0]}{stopbits}, flow: {flow})")
 
         except Exception as ex:
@@ -347,6 +446,63 @@ class RelayControlApp:
         self.lbl_conn_status.config(bg="#dc3545")
         self.btn_connect.config(text="Connect")
         self._log_info("Disconnected from serial port.")
+
+    def _schedule_next_poll(self):
+        if self._poll_job is not None:
+            try:
+                self.root.after_cancel(self._poll_job)
+            except Exception:
+                pass
+            self._poll_job = None
+
+        try:
+            interval = int(self.read_interval_var.get())
+            if interval < 20:
+                interval = 20
+        except (ValueError, tk.TclError):
+            interval = 500
+
+        self._poll_job = self.root.after(interval, self._poll_inputs_timer)
+
+    def _poll_inputs_timer(self):
+        self._poll_job = None
+        if self.controller.is_connected and self.auto_read_var.get():
+            self._perform_read_inputs(log_on_change_only=True)
+        self._schedule_next_poll()
+
+    def _perform_read_inputs(self, log_on_change_only: bool = False):
+        try:
+            addr = int(self.address_var.get())
+            if not (1 <= addr <= 255):
+                return
+        except Exception:
+            return
+
+        try:
+            cmd, resp, states = self.controller.read_inputs(addr, count=8)
+            cmd_hex = parse_hex_string(cmd)
+
+            if states is not None:
+                state_changed = (self._last_logged_inputs != states)
+                if not log_on_change_only or state_changed:
+                    resp_hex = parse_hex_string(resp)
+                    state_summary = " ".join([f"IN{i}:{'1' if s else '0'}" for i, s in enumerate(states)])
+                    if not log_on_change_only:
+                        self._log_tx(f"Board 0x{addr:02X} ({addr}) -> Read Inputs (0-7): [ {cmd_hex} ]")
+                    self._log_rx(f"Board 0x{addr:02X} ({addr}) <- Inputs: [ {resp_hex} ] ({state_summary})")
+                    self._last_logged_inputs = list(states)
+                self._update_input_ui_states(states)
+            else:
+                if not log_on_change_only:
+                    self._log_tx(f"Board 0x{addr:02X} ({addr}) -> Read Inputs (0-7): [ {cmd_hex} ]")
+                    if not self.controller.is_connected:
+                        self._log_info(f"(Offline test mode: Read command [ {cmd_hex} ] prepared)")
+                    else:
+                        resp_hex = parse_hex_string(resp) if resp else "(No response/timeout)"
+                        self._log_error(f"Board 0x{addr:02X} read response invalid: {resp_hex}")
+        except Exception as ex:
+            if not log_on_change_only:
+                self._log_error(f"Error reading inputs: {ex}")
 
     def _set_relay(self, relay_index: int, state: bool):
         try:

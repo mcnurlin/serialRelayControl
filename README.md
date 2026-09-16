@@ -1,6 +1,6 @@
 # Serial Relay Controller (Modbus RTU)
 
-A robust Python application to control 8-channel Modbus RTU serial relay boards across addresses 1 to 255.
+A robust Python application to control 8-channel Modbus RTU serial relay boards and monitor 8 digital input ports across addresses 1 to 255.
 
 ---
 
@@ -20,17 +20,23 @@ A robust Python application to control 8-channel Modbus RTU serial relay boards 
   - Individual ON, OFF, and Toggle buttons for each relay.
   - Visual status LED indicators (Green = ON, Gray = OFF).
   - Batch "Turn ALL Relays ON" and "Turn ALL Relays OFF" operations.
+- **8 Digital Input Port Indicators (Inputs 0 to 7)**:
+  - Dedicated row of visual status indicators for Inputs 0 to 7 (Green = HIGH/Active, Gray = LOW/Inactive).
+  - Configurable read polling interval in milliseconds (e.g. 50ms to 10000ms).
+  - Automatic continuous polling or manual on-demand "Read Inputs Now" trigger.
 - **Communication & Activity Logging**:
   - Live console displaying timestamped TX/RX hex frames.
 - **Dual Mode (GUI & CLI)**:
   - Interactive desktop GUI.
-  - Headless command-line interface for automation and scripting.
+  - Headless command-line interface for automation, relay switching, and input reading.
 
 ---
 
 ## Modbus RTU Protocol Specification
 
-Each relay command follows the Modbus RTU Function 0x05 (Write Single Coil) standard:
+### 1. Relay Control — Function 0x05 (Write Single Coil)
+
+Each relay command follows the Modbus RTU Function 0x05 standard:
 
 | Byte | Field | Description |
 |---|---|---|
@@ -40,7 +46,7 @@ Each relay command follows the Modbus RTU Function 0x05 (Write Single Coil) stan
 | 4..5 | Value | `0xFF00` (ON) / `0x0000` (OFF) |
 | 6..7 | CRC-16 | Modbus 16-bit CRC (Little-Endian: Low byte first, High byte second) |
 
-### Verified Command Vectors (Address 0x01)
+#### Verified Command Vectors (Address 0x01)
 
 | Relay | State | Hex Frame |
 |---|---|---|
@@ -60,6 +66,24 @@ Each relay command follows the Modbus RTU Function 0x05 (Write Single Coil) stan
 | Relay 6 | OFF | `01 05 00 06 00 00 2D CB` |
 | Relay 7 | ON | `01 05 00 07 FF 00 3D FB` |
 | Relay 7 | OFF | `01 05 00 07 00 00 7C 0B` |
+
+---
+
+### 2. Digital Input Read — Function 0x02 (Read Discrete Inputs)
+
+Input ports (0 to 7) are read using Modbus RTU Function 0x02:
+
+| Byte | Field | Description |
+|---|---|---|
+| 0 | Slave Address | `0x01` to `0xFF` (1 to 255) |
+| 1 | Function Code | `0x02` (Read Discrete Inputs) |
+| 2..3 | Start Address | `0x0000` (Starting at Input 0) |
+| 4..5 | Quantity | `0x0008` (8 inputs) |
+| 6..7 | CRC-16 | Modbus 16-bit CRC (e.g. `79 CC` for Address 1) |
+
+- **Address 1 Read Frame**: `01 02 00 00 00 08 79 CC`
+- **Response Format**: `[Address, 0x02, ByteCount=0x01, InputDataByte, CRC_L, CRC_H]`
+  - Bits 0 to 7 correspond to Inputs 0 to 7 (1 = High/Active, 0 = Low/Inactive).
 
 ---
 
@@ -83,9 +107,15 @@ python gui.py
 ```
 
 ### 2. Command-Line Interface (CLI)
-To test or trigger a relay from the command line:
+To test relay operations or read digital inputs from the command line:
 
 ```bash
+# Read digital inputs 0 to 7 on Board Address 1 (prepare frame)
+python main.py --cli --read-inputs --address 1
+
+# Read digital inputs from hardware on COM3 at 9600 baud
+python main.py --port COM3 --baud 9600 --address 1 --read-inputs
+
 # Prepare and print command frame for Address 1, Relay 0 ON
 python main.py --cli --address 1 --relay 0 --state on
 
