@@ -1,6 +1,6 @@
 # Serial Relay Controller (Modbus RTU)
 
-A robust Python application to control 8-channel Modbus RTU serial relay boards and monitor 8 digital input ports across addresses 1 to 255.
+A robust Python application to control 8-channel Modbus RTU serial relay boards, monitor 8 digital input ports, and read 8-channel 4-20mA analog inputs across addresses 1 to 255.
 
 ---
 
@@ -13,22 +13,31 @@ A robust Python application to control 8-channel Modbus RTU serial relay boards 
   - Stop bits: 1, 1.5, 2 (Default: 1)
   - Parity: None, Even, Odd, Mark, Space (Default: None)
   - Flow control: None, Hardware (RTS/CTS), Software (XON/XOFF), DSR/DTR (Default: None)
-- **Flexible Board Addressing**:
+- **Flexible Board Addressing & Network Scanner**:
   - Supports board addresses from `1` to `255` (`0x01` to `0xFF`).
   - Real-time address step (`+1` / `-1`), spinbox input, and hex indicator.
+  - **Network "SCAN" Feature**: Scans the network for all connected Modbus RTU devices across addresses 1 to 255.
+  - **Discovered Devices List Box**: Displays all detected device addresses alongside their response strings/bytes with real-time updates and one-click/double-click address selection.
 - **8 Relay Controls (Relays 0 to 7)**:
   - Individual ON, OFF, and Toggle buttons for each relay.
   - Visual status LED indicators (Green = ON, Gray = OFF).
   - Batch "Turn ALL Relays ON" and "Turn ALL Relays OFF" operations.
 - **8 Digital Input Port Indicators (Inputs 0 to 7)**:
   - Dedicated row of visual status indicators for Inputs 0 to 7 (Green = HIGH/Active, Gray = LOW/Inactive).
+- **8 Analog Inputs (AI 0 to 7) — 4-20mA**:
+  - Dedicated row of 8 analog input cards displaying current in `mA` (e.g. `4.00 mA` to `20.00 mA`).
+  - Graphical level meter / progress bar for each 4-20mA channel (0% at 4mA, 100% at 20mA).
+  - Live raw 16-bit register value indicator (`Raw: 0` / hex).
+  - Selectable scaling presets: `Auto`, `4000-20000 (0.001 mA)`, `0-20000`, `12-bit ADC (0-4095)`, `10-bit ADC`, `16-bit ADC`.
+  - Color-coded status badges (cyan for normal 4-20mA, yellow for loop fault/open circuit < 3.8mA, red for over-range > 20.5mA).
+- **Configurable Polling & Controls**:
   - Configurable read polling interval in milliseconds (e.g. 50ms to 10000ms).
-  - Automatic continuous polling or manual on-demand "Read Inputs Now" trigger.
+  - Automatic continuous polling or manual triggers ("Read All Now", "Read Digital", "Read Analog").
 - **Communication & Activity Logging**:
   - Live console displaying timestamped TX/RX hex frames.
 - **Dual Mode (GUI & CLI)**:
   - Interactive desktop GUI.
-  - Headless command-line interface for automation, relay switching, and input reading.
+  - Headless command-line interface for automation, relay switching, digital input reading, and analog sensor reading.
 
 ---
 
@@ -87,6 +96,23 @@ Input ports (0 to 7) are read using Modbus RTU Function 0x02:
 
 ---
 
+### 3. Analog Input Read — Function 0x04 (Read Input Registers)
+
+Analog input channels (AI 0 to 7) for 4-20mA current measurement are read using Modbus RTU Function 0x04 (or 0x03):
+
+| Byte | Field | Description |
+|---|---|---|
+| 0 | Slave Address | `0x01` to `0xFF` (1 to 255) |
+| 1 | Function Code | `0x04` (Read Input Registers) |
+| 2..3 | Start Address | `0x0000` (Starting at Register 0) |
+| 4..5 | Quantity | `0x0008` (8 16-bit registers) |
+| 6..7 | CRC-16 | Modbus 16-bit CRC (e.g. `F1 CC` for Address 1) |
+
+- **Address 1 Read Frame**: `01 04 00 00 00 08 F1 CC`
+- **Response Format**: `[Address, 0x04, ByteCount=0x10 (16 bytes), Reg0_Hi, Reg0_Lo, ..., Reg7_Hi, Reg7_Lo, CRC_L, CRC_H]`
+
+---
+
 ## Installation
 
 ```bash
@@ -107,9 +133,21 @@ python gui.py
 ```
 
 ### 2. Command-Line Interface (CLI)
-To test relay operations or read digital inputs from the command line:
+To test relay operations, read inputs, or scan the network from the command line:
 
 ```bash
+# Scan Modbus RTU network for all active devices on COM3
+python main.py --port COM3 --baud 9600 --scan
+
+# Scan a specific address range (e.g. 1 to 32)
+python main.py --port COM3 --baud 9600 --scan --scan-start 1 --scan-end 32
+
+# Read 8 analog inputs (4-20mA) on Board Address 1 (prepare frame)
+python main.py --cli --read-analog --address 1
+
+# Read 8 analog inputs from hardware on COM3 at 9600 baud
+python main.py --port COM3 --baud 9600 --address 1 --read-analog
+
 # Read digital inputs 0 to 7 on Board Address 1 (prepare frame)
 python main.py --cli --read-inputs --address 1
 
@@ -159,5 +197,4 @@ dist/SerialRelayController.exe
   ```bash
   pyinstaller --clean --onefile --windowed --name SerialRelayController main.py
   ```
-[![Download EXE](https://shields.io)][(YOUR_COPIED_EXE_DOWNLOAD_URL_HERE)](https://github.com/mcnurlin/serialRelayControl/blob/master/SerialRelayController.exe
-)
+  
